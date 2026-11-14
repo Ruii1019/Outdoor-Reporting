@@ -1,12 +1,42 @@
-import React from 'react';
-import { useEffect, useMemo, useState } from "react";
+import React from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  MapPin, Camera, Plus, Search, Trash2, Pencil, CheckCircle2,
-  ClipboardList, Clock3, AlertCircle, X, Leaf
+  MapPin,
+  Camera,
+  Plus,
+  Search,
+  Trash2,
+  Pencil,
+  CheckCircle2,
+  ClipboardList,
+  Clock3,
+  AlertCircle,
+  Leaf
 } from "lucide-react";
 import "./App.css";
+import {
+  saveReport as saveReportToDB,
+  getAllReports,
+  deleteReport as deleteReportFromDB,
+  addPendingSync,
+  getPendingSync,
+  removePendingSync
+} from "./database";
+import {
+  fetchReports,
+  createReport,
+  updateReport,
+  removeReport
+} from "./api";
 
-const categories = ["Path or road", "Broken equipment", "Litter or dumping", "Lighting", "Wildlife", "Other"];
+const categories = [
+  "Path or road",
+  "Broken equipment",
+  "Litter or dumping",
+  "Lighting",
+  "Wildlife",
+  "Other"
+];
 
 const starterReports = [
   {
@@ -45,35 +75,171 @@ const emptyForm = {
   category: categories[0],
   description: "",
   location: "",
+  accuracy: null,
   photo: ""
 };
 
 function App() {
-  const [reports, setReports] = useState(readReports);
+  const [reports, setReports] = useState(starterReports);
+  const [reportsLoaded, setReportsLoaded] = useState(false);
   const [activePage, setActivePage] = useState("reports");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [message, setMessage] = useState("");
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const videoRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+
+  
+useEffect(() => {
+  async function loadReports() {
+    try {
+      // First, try to get reports from the server
+      const serverReports = await fetchReports();
+
+      setReports(serverReports);
+
+      // Save server reports to local storage
+      localStorage.setItem(
+        "outdoorReports",
+        JSON.stringify(serverReports)
+      );
+
+      // Save server reports to IndexedDB
+      for (const report of serverReports) {
+        await saveReportToDB(report);
+      }
+
+    } catch (serverError) {
+      console.error("Could not connect to server:", serverError);
+
+      try {
+        // If the server is unavailable, load local reports
+        const savedReports = await getAllReports();
+
+        const oldReportsText = localStorage.getItem("outdoorReports");
+        const oldReports = oldReportsText
+          ? JSON.parse(oldReportsText)
+          : [];
+
+        const combinedReports = [...savedReports];
+
+        for (const report of oldReports) {
+          const alreadyExists = combinedReports.some(
+            (saved) => saved.id === report.id
+          );
+
+          if (!alreadyExists) {
+            combinedReports.push(report);
+          }
+        }
+
+        if (combinedReports.length === 0) {
+          combinedReports.push(...starterReports);
+        }
+
+        setReports(combinedReports);
+
+        for (const report of combinedReports) {
+          await saveReportToDB(report);
+        }
+
+      } catch (localError) {
+        console.error("Failed to load local reports:", localError);
+        setReports(starterReports);
+        setMessage("Could not load saved reports.");
+      }
+
+    } finally {
+      setReportsLoaded(true);
+    }
+  }
+
+  loadReports();
+}, []);
 
   useEffect(() => {
-    localStorage.setItem("outdoorReports", JSON.stringify(reports));
-  }, [reports]);
+    async function saveReportsToDatabase() {
+      if (!reportsLoaded) return;
+  
+      try {
+        // Save reports to IndexedDB
+        for (const report of reports) {
+          await saveReportToDB(report);
+        }
+  
+        // Back up reports to Local Storage
+        localStorage.setItem(
+          "outdoorReports",
+          JSON.stringify(reports)
+        );
+  
+      } catch (error) {
+        console.error("Failed to save reports:", error);
+        setMessage("Could not save reports locally.");
+      }
+    }
+  
+    saveReportsToDatabase();
+  }, [reports, reportsLoaded]);
+
+  useEffect(() => {
+    if (cameraOpen && videoRef.current && cameraStreamRef.current) {
+      videoRef.current.srcObject = cameraStreamRef.current;
+    }
+  }, [cameraOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
+
+  // Automatically synchronise reports when the network is restored
+  useEffect(() => {
+    function handleOnline() {
+      console.log("Network restored. Starting synchronisation...");
+      syncPendingOperations();
+    }
+
+    window.addEventListener("online", handleOnline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+    };
+  }, []);
+
 
   const filteredReports = useMemo(() => {
-    return reports.filter((report) => {
-      const matchesSearch = `${report.title} ${report.category} ${report.description}`
-        .toLowerCase()
-        .includes(search.toLowerCase());
-      const matchesStatus = statusFilter === "All" || report.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    });
+    return reports
+      .filter((report) => {
+        const matchesSearch = `${report.title} ${report.category} ${report.description}`
+          .toLowerCase()
+          .includes(search.toLowerCase());
+  
+        const matchesStatus =
+          statusFilter === "All" || report.status === statusFilter;
+  
+        return matchesSearch && matchesStatus;
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() -
+          new Date(a.createdAt).getTime()
+      );
   }, [reports, search, statusFilter]);
 
   const openCount = reports.filter((report) => report.status === "Open").length;
-  const progressCount = reports.filter((report) => report.status === "In progress").length;
-  const resolvedCount = reports.filter((report) => report.status === "Resolved").length;
+  const progressCount = reports.filter(
+    (report) => report.status === "In progress"
+  ).length;
+  const resolvedCount = reports.filter(
+    (report) => report.status === "Resolved"
+  ).length;
 
   function showMessage(text) {
     setMessage(text);
@@ -84,24 +250,47 @@ function App() {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
   }
-
-  function getLocation() {
-    if (!navigator.geolocation) {
-      showMessage("Geolocation is not supported by this browser.");
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        setForm((current) => ({
-          ...current,
-          location: `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`
-        }));
-        showMessage("Location added.");
-      },
-      () => showMessage("Location could not be accessed. Check browser permissions.")
-    );
+  
+function getLocation() {
+  if (!navigator.geolocation) {
+    showMessage("Geolocation is not supported by this browser.");
+    return;
   }
+
+  showMessage("Getting your location...");
+
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const { latitude, longitude } = position.coords;
+      const accuracy = position.coords.accuracy;
+      console.log("GPS accuracy:", accuracy);
+
+      setForm((current) => ({
+        ...current,
+        location: `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
+        accuracy: Math.round(accuracy)
+      }));
+
+      showMessage("Location added successfully.");
+    },
+    (error) => {
+      if (error.code === error.PERMISSION_DENIED) {
+        showMessage("Location permission was denied.");
+      } else if (error.code === error.POSITION_UNAVAILABLE) {
+        showMessage("Location information is unavailable.");
+      } else if (error.code === error.TIMEOUT) {
+        showMessage("Location request timed out. Please try again.");
+      } else {
+        showMessage("Could not get your location.");
+      }
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0
+    }
+  );
+}
 
   function addPhoto(event) {
     const file = event.target.files?.[0];
@@ -113,76 +302,286 @@ function App() {
     }
 
     const reader = new FileReader();
-    reader.onload = () => setForm((current) => ({ ...current, photo: reader.result }));
+    reader.onload = () => {
+      setForm((current) => ({ ...current, photo: reader.result }));
+    };
     reader.readAsDataURL(file);
   }
 
-  function saveReport(event) {
-    event.preventDefault();
+  async function startCamera() {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        showMessage("Camera access is not supported by this browser.");
+        return;
+      }
 
-    if (!form.title.trim() || !form.description.trim()) {
-      showMessage("Please add a title and description.");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false
+      });
+
+      cameraStreamRef.current = stream;
+      setCameraOpen(true);
+    } catch (error) {
+      showMessage("Camera access failed. Please check browser permissions.");
+    }
+  }
+
+  function stopCamera() {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    }
+
+    setCameraOpen(false);
+  }
+
+  function takePhoto() {
+    const video = videoRef.current;
+
+    if (!video || !video.videoWidth) {
+      showMessage("Camera is not ready yet.");
       return;
     }
 
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      showMessage("Could not capture the photo. Please try again.");
+      return;
+    }
+
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const photo = canvas.toDataURL("image/jpeg", 0.85);
+
+    setForm((current) => ({
+      ...current,
+      photo
+    }));
+
+    stopCamera();
+    showMessage("Photo captured successfully.");
+  }
+
+  
+async function syncPendingOperations() {
+  try {
+    const pendingOperations = await getPendingSync();
+
+    for (const operation of pendingOperations) {
+      try {
+        if (operation.type === "create") {
+          await createReport(operation.report);
+
+        } else if (operation.type === "update") {
+          await updateReport(
+            operation.report.id,
+            operation.report
+          );
+
+        } else if (operation.type === "delete") {
+          await removeReport(operation.reportId);
+        }
+
+        await removePendingSync(operation.id);
+
+      } catch (error) {
+        console.error("Sync operation failed:", error);
+        showMessage("Some reports could not be synchronised.");
+        return;
+      }
+    }
+
+    const serverReports = await fetchReports();
+
+    setReports(serverReports);
+
+    showMessage("Reports synchronised successfully.");
+
+  } catch (error) {
+    console.error("Could not synchronise reports:", error);
+    showMessage("Could not synchronise reports.");
+  }
+}
+  
+
+async function saveReport(event) {
+  event.preventDefault();
+
+  if (!form.title.trim() || !form.description.trim()) {
+    showMessage("Please add a title and description.");
+    return;
+  }
+
+  try {
     if (editingId !== null) {
-      setReports((current) =>
-        current.map((report) =>
-          report.id === editingId ? { ...report, ...form } : report
-        )
+      // Prepare the updated report
+      const existingReport = reports.find(
+        (report) => report.id === editingId
       );
-      showMessage("Report updated.");
+
+      const updatedReport = {
+        ...existingReport,
+        ...form,
+        id: editingId
+      };
+
+      // Save locally first
+      await saveReportToDB(updatedReport);
+
+      try {
+        // Try to update the server
+        const serverReport = await updateReport(
+          editingId,
+          updatedReport
+        );
+
+        setReports((current) =>
+          current.map((report) =>
+            report.id === editingId ? serverReport : report
+          )
+        );
+
+        showMessage("Report updated and synchronised.");
+
+      } catch (error) {
+        // Keep the update for later synchronisation
+        await addPendingSync({
+          type: "update",
+          report: updatedReport
+        });
+
+        setReports((current) =>
+          current.map((report) =>
+            report.id === editingId ? updatedReport : report
+          )
+        );
+
+        showMessage("Report saved offline. It will sync later.");
+      }
+
     } else {
+      // Create a new report with a local ID
       const newReport = {
         ...form,
         id: Date.now(),
         status: "Open",
         createdAt: new Date().toISOString()
       };
-      setReports((current) => [newReport, ...current]);
-      showMessage("Report submitted.");
+
+      // Save locally first
+      await saveReportToDB(newReport);
+
+      try {
+        // Try to create the report on the server
+        const savedReport = await createReport(newReport);
+
+        setReports((current) => [savedReport, ...current]);
+
+        showMessage("Report submitted.");
+
+      } catch (error) {
+        // Add the report to the offline sync queue
+        await addPendingSync({
+          type: "create",
+          report: newReport
+        });
+
+        setReports((current) => [newReport, ...current]);
+
+        showMessage("Report saved offline. It will sync later.");
+      }
     }
 
-    setForm(emptyForm);
-    setEditingId(null);
-    setActivePage("reports");
+  } catch (error) {
+    console.error("Failed to save report:", error);
+    showMessage("Could not save report locally.");
+    return;
   }
 
-  function editReport(report) {
-    setForm({
-      title: report.title,
-      category: report.category,
-      description: report.description,
-      location: report.location,
-      photo: report.photo || ""
-    });
-    setEditingId(report.id);
-    setActivePage("form");
-  }
+  stopCamera();
+  setForm(emptyForm);
+  setEditingId(null);
+  setActivePage("reports");
+}
+  
 
-  function deleteReport(id) {
-    if (!window.confirm("Delete this report?")) return;
-    setReports((current) => current.filter((report) => report.id !== id));
-    showMessage("Report deleted.");
+async function deleteReport(id) {
+  if (!window.confirm("Delete this report?")) return;
+
+  try {
+    // Delete the report from local IndexedDB first
+    await deleteReportFromDB(id);
+
+    // Update React state
+    const updatedReports = reports.filter(
+      (report) => report.id !== id
+    );
+
+    setReports(updatedReports);
+
+    // Update Local Storage
+    localStorage.setItem(
+      "outdoorReports",
+      JSON.stringify(updatedReports)
+    );
+
+    try {
+      // Try to delete the report from the server
+      await removeReport(id);
+
+      showMessage("Report deleted.");
+
+    } catch (error) {
+      // Save the delete operation for later synchronisation
+      await addPendingSync({
+        type: "delete",
+        reportId: id
+      });
+
+      showMessage("Deletion saved offline. It will sync later.");
+    }
+
+  } catch (error) {
+    console.error("Failed to delete report:", error);
+    showMessage("Could not delete report locally.");
   }
+}
+
 
   function changeStatus(id, status) {
     setReports((current) =>
-      current.map((report) => report.id === id ? { ...report, status } : report)
+      current.map((report) =>
+        report.id === id ? { ...report, status } : report
+      )
     );
   }
 
   function cancelForm() {
+    stopCamera();
     setForm(emptyForm);
     setEditingId(null);
     setActivePage("reports");
+  }
+
+  function openNewReport() {
+    stopCamera();
+    setForm(emptyForm);
+    setEditingId(null);
+    setActivePage("form");
   }
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark"><Leaf size={21} /></div>
+          <div className="brand-mark">
+            <Leaf size={21} />
+          </div>
           <div>
             <strong>FieldNote</strong>
             <span>Outdoor reporting</span>
@@ -190,10 +589,21 @@ function App() {
         </div>
 
         <div className="side-label">WORKSPACE</div>
-        <button className={`nav-link ${activePage === "reports" ? "active" : ""}`} onClick={() => setActivePage("reports")}>
+
+        <button
+          className={`nav-link ${activePage === "reports" ? "active" : ""}`}
+          onClick={() => {
+            stopCamera();
+            setActivePage("reports");
+          }}
+        >
           <ClipboardList size={18} /> Reports
         </button>
-        <button className={`nav-link ${activePage === "form" ? "active" : ""}`} onClick={() => { setForm(emptyForm); setEditingId(null); setActivePage("form"); }}>
+
+        <button
+          className={`nav-link ${activePage === "form" ? "active" : ""}`}
+          onClick={openNewReport}
+        >
           <Plus size={18} /> New report
         </button>
 
@@ -204,38 +614,84 @@ function App() {
             <p>Reports are saved in this browser on this device.</p>
           </div>
         </div>
-        <div className="sidebar-footer">Outdoor Reporting · Project prototype</div>
+
+        <div className="sidebar-footer">
+          Outdoor Reporting · Project prototype
+        </div>
       </aside>
 
       <main className="main-content">
         <header className="topbar">
           <div>
             <p className="eyebrow">COMMUNITY MAINTENANCE</p>
-            <h1>{activePage === "form" ? (editingId ? "Edit report" : "Create a report") : "Reports overview"}</h1>
+            <h1>
+              {activePage === "form"
+                ? editingId
+                  ? "Edit report"
+                  : "Create a report"
+                : "Reports overview"}
+            </h1>
           </div>
-          <button className="primary-button" onClick={() => { setForm(emptyForm); setEditingId(null); setActivePage("form"); }}>
+
+          <button className="primary-button" onClick={openNewReport}>
             <Plus size={17} /> New report
           </button>
         </header>
 
-        {message && <div className="toast"><CheckCircle2 size={17} />{message}</div>}
+        {message && (
+          <div className="toast">
+            <CheckCircle2 size={17} />
+            {message}
+          </div>
+        )}
 
         {activePage === "reports" ? (
           <>
             <section className="welcome-panel">
               <div>
-                <span className="welcome-kicker">A BETTER OUTDOOR SPACE STARTS HERE</span>
-                <h2>Keep track of the little things<br />that make a big difference.</h2>
-                <p>Record maintenance issues in parks, paths and shared outdoor areas.</p>
+                <span className="welcome-kicker">
+                  A BETTER OUTDOOR SPACE STARTS HERE
+                </span>
+                <h2>
+                  Keep track of the little things
+                  <br />
+                  that make a big difference.
+                </h2>
+                <p>
+                  Record maintenance issues in parks, paths and shared outdoor
+                  areas.
+                </p>
               </div>
-              <div className="welcome-icon"><Leaf size={58} strokeWidth={1.2} /></div>
+              <div className="welcome-icon">
+                <Leaf size={58} strokeWidth={1.2} />
+              </div>
             </section>
 
             <section className="stats-grid">
-              <StatCard label="Open reports" value={openCount} icon={<AlertCircle size={19} />} tone="orange" />
-              <StatCard label="In progress" value={progressCount} icon={<Clock3 size={19} />} tone="blue" />
-              <StatCard label="Resolved" value={resolvedCount} icon={<CheckCircle2 size={19} />} tone="green" />
-              <StatCard label="All reports" value={reports.length} icon={<ClipboardList size={19} />} tone="purple" />
+              <StatCard
+                label="Open reports"
+                value={openCount}
+                icon={<AlertCircle size={19} />}
+                tone="orange"
+              />
+              <StatCard
+                label="In progress"
+                value={progressCount}
+                icon={<Clock3 size={19} />}
+                tone="blue"
+              />
+              <StatCard
+                label="Resolved"
+                value={resolvedCount}
+                icon={<CheckCircle2 size={19} />}
+                tone="green"
+              />
+              <StatCard
+                label="All reports"
+                value={reports.length}
+                icon={<ClipboardList size={19} />}
+                tone="purple"
+              />
             </section>
 
             <section className="reports-section">
@@ -244,15 +700,26 @@ function App() {
                   <h2>Recent reports</h2>
                   <p>Review and update submitted issues.</p>
                 </div>
-                <span className="report-total">{filteredReports.length} items</span>
+                <span className="report-total">
+                  {filteredReports.length} items
+                </span>
               </div>
 
               <div className="toolbar">
                 <div className="search-box">
                   <Search size={17} />
-                  <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search reports..." />
+                  <input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search reports..."
+                  />
                 </div>
-                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter by status">
+
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value)}
+                  aria-label="Filter by status"
+                >
                   <option>All</option>
                   <option>Open</option>
                   <option>In progress</option>
@@ -265,93 +732,249 @@ function App() {
                   <div className="empty-state">
                     <ClipboardList size={34} />
                     <h3>No reports found</h3>
-                    <p>Try changing your search or create a new report.</p>
+                    <p>
+                      Try changing your search or create a new report.
+                    </p>
                   </div>
-                ) : filteredReports.map((report) => (
-                  <article className="report-card" key={report.id}>
-                    <div className="report-image">
-                      {report.photo ? <img src={report.photo} alt="" /> : <div className="image-placeholder"><Leaf size={25} /></div>}
-                    </div>
-                    <div className="report-info">
-                      <div className="report-title-line">
-                        <h3>{report.title}</h3>
-                        <StatusBadge status={report.status} />
+                ) : (
+                  filteredReports.map((report) => (
+                    <article className="report-card" key={report.id}>
+                      <div className="report-image">
+                        {report.photo ? (
+                          <img src={report.photo} alt="" />
+                        ) : (
+                          <div className="image-placeholder">
+                            <Leaf size={25} />
+                          </div>
+                        )}
                       </div>
-                      <span className="category-label">{report.category}</span>
-                      <p>{report.description}</p>
-                      <div className="report-meta">
-                        <span><MapPin size={14} />{report.location || "Location not added"}</span>
-                        <span>{new Date(report.createdAt).toLocaleDateString()}</span>
+
+                      <div className="report-info">
+                        <div className="report-title-line">
+                          <h3>{report.title}</h3>
+                          <StatusBadge status={report.status} />
+                        </div>
+
+                        <span className="category-label">
+                          {report.category}
+                        </span>
+                        <p>{report.description}</p>
+
+                        <div className="report-meta">
+                          <span>
+                            <MapPin size={14} />
+                            {report.location || "Location not added"}
+                          </span>
+                          <span>
+                            {new Date(report.createdAt).toLocaleDateString()}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                    <div className="report-actions">
-                      <select value={report.status} onChange={(event) => changeStatus(report.id, event.target.value)} aria-label={`Status for ${report.title}`}>
-                        <option>Open</option>
-                        <option>In progress</option>
-                        <option>Resolved</option>
-                      </select>
-                      <button className="icon-button" onClick={() => editReport(report)} aria-label="Edit report"><Pencil size={16} /></button>
-                      <button className="icon-button danger" onClick={() => deleteReport(report.id)} aria-label="Delete report"><Trash2 size={16} /></button>
-                    </div>
-                  </article>
-                ))}
+
+                      <div className="report-actions">
+                        <select
+                          value={report.status}
+                          onChange={(event) =>
+                            changeStatus(report.id, event.target.value)
+                          }
+                          aria-label={`Status for ${report.title}`}
+                        >
+                          <option>Open</option>
+                          <option>In progress</option>
+                          <option>Resolved</option>
+                        </select>
+
+                        <button
+                          className="icon-button"
+                          onClick={() => editReport(report)}
+                          aria-label="Edit report"
+                        >
+                          <Pencil size={16} />
+                        </button>
+
+                        <button
+                          className="icon-button danger"
+                          onClick={() => deleteReport(report.id)}
+                          aria-label="Delete report"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                )}
               </div>
             </section>
           </>
         ) : (
           <section className="form-panel">
             <div className="form-intro">
-              <span className="form-icon"><ClipboardList size={22} /></span>
+              <span className="form-icon">
+                <ClipboardList size={22} />
+              </span>
               <div>
                 <h2>Issue details</h2>
-                <p>Give enough information for someone to understand the problem.</p>
+                <p>
+                  Give enough information for someone to understand the
+                  problem.
+                </p>
               </div>
             </div>
+
             <form onSubmit={saveReport}>
               <div className="form-grid">
                 <label className="field full-width">
-                  <span>Report title <b>*</b></span>
-                  <input name="title" value={form.title} onChange={updateField} placeholder="e.g. Broken light beside the footpath" required />
+                  <span>
+                    Report title <b>*</b>
+                  </span>
+                  <input
+                    name="title"
+                    value={form.title}
+                    onChange={updateField}
+                    placeholder="e.g. Broken light beside the footpath"
+                    required
+                  />
                 </label>
+
                 <label className="field">
                   <span>Category</span>
-                  <select name="category" value={form.category} onChange={updateField}>
-                    {categories.map((category) => <option key={category}>{category}</option>)}
+                  <select
+                    name="category"
+                    value={form.category}
+                    onChange={updateField}
+                  >
+                    {categories.map((category) => (
+                      <option key={category}>{category}</option>
+                    ))}
                   </select>
                 </label>
+
                 <div className="field">
                   <span>Location</span>
                   <div className="location-row">
-                    <input name="location" value={form.location} onChange={updateField} placeholder="Add coordinates or a place name" />
-                    <button type="button" className="secondary-button" onClick={getLocation}><MapPin size={16} /> Get location</button>
+                    <input
+                      name="location"
+                      value={form.location}
+                      onChange={updateField}
+                      placeholder="Add coordinates or a place name"
+                    />
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={getLocation}
+                    >
+                      <MapPin size={16} /> Get location
+                    </button>
                   </div>
                   <small>Allow location access when your browser asks.</small>
+                  {form.accuracy !== null && (
+                    <small className="accuracy-info">
+                      GPS accuracy: ±{form.accuracy} metres
+                    </small>
+                  )}
                 </div>
+
                 <label className="field full-width">
-                  <span>Description <b>*</b></span>
-                  <textarea name="description" value={form.description} onChange={updateField} placeholder="Describe what you noticed..." rows="5" required />
+                  <span>
+                    Description <b>*</b>
+                  </span>
+                  <textarea
+                    name="description"
+                    value={form.description}
+                    onChange={updateField}
+                    placeholder="Describe what you noticed..."
+                    rows="5"
+                    required
+                  />
                 </label>
+
                 <div className="field full-width">
                   <span>Photo</span>
-                  <label className="upload-box">
-                    <input type="file" accept="image/*" capture="environment" onChange={addPhoto} />
-                    {form.photo ? (
-                      <img className="photo-preview" src={form.photo} alt="Selected report" />
-                    ) : (
-                      <>
-                        <span className="upload-icon"><Camera size={22} /></span>
-                        <strong>Add a photo</strong>
-                        <small>Choose an image from your device or take a photo.</small>
-                      </>
-                    )}
-                  </label>
+
+                  {cameraOpen ? (
+                    <div className="camera-panel">
+                      <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        className="camera-preview"
+                      />
+
+                      <div className="camera-actions">
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={takePhoto}
+                        >
+                          <Camera size={17} /> Take photo
+                        </button>
+
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={stopCamera}
+                        >
+                          Close camera
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="camera-actions">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={startCamera}
+                        >
+                          <Camera size={17} /> Open camera
+                        </button>
+                      </div>
+
+                      <label className="upload-box">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={addPhoto}
+                        />
+
+                        {form.photo ? (
+                          <img
+                            className="photo-preview"
+                            src={form.photo}
+                            alt="Selected report"
+                          />
+                        ) : (
+                          <>
+                            <span className="upload-icon">
+                              <Camera size={22} />
+                            </span>
+                            <strong>Add a photo</strong>
+                            <small>
+                              Choose an image from your device.
+                            </small>
+                          </>
+                        )}
+                      </label>
+                    </>
+                  )}
                 </div>
               </div>
+
               <div className="form-footer">
-                <span><b>*</b> Required fields</span>
+                <span>
+                  <b>*</b> Required fields
+                </span>
                 <div>
-                  <button type="button" className="secondary-button" onClick={cancelForm}>Cancel</button>
-                  <button type="submit" className="primary-button">{editingId ? "Save changes" : "Submit report"}</button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={cancelForm}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="primary-button">
+                    {editingId ? "Save changes" : "Submit report"}
+                  </button>
                 </div>
               </div>
             </form>
@@ -366,7 +989,10 @@ function StatCard({ label, value, icon, tone }) {
   return (
     <div className="stat-card">
       <span className={`stat-icon ${tone}`}>{icon}</span>
-      <div><p>{label}</p><strong>{value}</strong></div>
+      <div>
+        <p>{label}</p>
+        <strong>{value}</strong>
+      </div>
     </div>
   );
 }
