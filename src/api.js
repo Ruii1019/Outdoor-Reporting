@@ -1,4 +1,3 @@
-
 const API_URL = "http://localhost:5001/api/reports";
 
 // Get all reports from the server

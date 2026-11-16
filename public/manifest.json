@@ -1,0 +1,23 @@
+{
+  "name": "FieldNote - Outdoor Reporting",
+  "short_name": "FieldNote",
+  "description": "Report outdoor maintenance issues easily.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFF8FA",
+  "theme_color": "#F7DDE5",
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

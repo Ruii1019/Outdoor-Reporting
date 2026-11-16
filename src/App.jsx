@@ -92,96 +92,97 @@ function App() {
   const videoRef = useRef(null);
   const cameraStreamRef = useRef(null);
 
-  
-useEffect(() => {
-  async function loadReports() {
-    try {
-      // First, try to get reports from the server
-      const serverReports = await fetchReports();
-
-      setReports(serverReports);
-
-      // Save server reports to local storage
-      localStorage.setItem(
-        "outdoorReports",
-        JSON.stringify(serverReports)
-      );
-
-      // Save server reports to IndexedDB
-      for (const report of serverReports) {
-        await saveReportToDB(report);
-      }
-
-    } catch (serverError) {
-      console.error("Could not connect to server:", serverError);
-
+  useEffect(() => {
+    async function loadReports() {
       try {
-        // If the server is unavailable, load local reports
-        const savedReports = await getAllReports();
+        // First, try to get reports from the server
+        const serverReports = await fetchReports();
 
-        const oldReportsText = localStorage.getItem("outdoorReports");
-        const oldReports = oldReportsText
-          ? JSON.parse(oldReportsText)
-          : [];
+        setReports(serverReports);
 
-        const combinedReports = [...savedReports];
+        // Save server reports to local storage
+        localStorage.setItem(
+          "outdoorReports",
+          JSON.stringify(serverReports)
+        );
 
-        for (const report of oldReports) {
-          const alreadyExists = combinedReports.some(
-            (saved) => saved.id === report.id
-          );
-
-          if (!alreadyExists) {
-            combinedReports.push(report);
-          }
-        }
-
-        if (combinedReports.length === 0) {
-          combinedReports.push(...starterReports);
-        }
-
-        setReports(combinedReports);
-
-        for (const report of combinedReports) {
+        // Save server reports to IndexedDB
+        for (const report of serverReports) {
           await saveReportToDB(report);
         }
 
-      } catch (localError) {
-        console.error("Failed to load local reports:", localError);
-        setReports(starterReports);
-        setMessage("Could not load saved reports.");
+      } catch (serverError) {
+        console.error("Could not connect to server:", serverError);
+
+        try {
+          // If the server is unavailable, load local reports
+          const savedReports = await getAllReports();
+
+          const oldReportsText = localStorage.getItem("outdoorReports");
+          const oldReports = oldReportsText
+            ? JSON.parse(oldReportsText)
+            : [];
+
+          const combinedReports = [...savedReports];
+
+          for (const report of oldReports) {
+            const alreadyExists = combinedReports.some(
+              (saved) => saved.id === report.id
+            );
+
+            if (!alreadyExists) {
+              combinedReports.push(report);
+            }
+          }
+
+          if (combinedReports.length === 0) {
+            combinedReports.push(...starterReports);
+          }
+
+          setReports(combinedReports);
+
+          for (const report of combinedReports) {
+            await saveReportToDB(report);
+          }
+
+        } catch (localError) {
+          console.error("Failed to load local reports:", localError);
+          setReports(starterReports);
+          setMessage("Could not load saved reports.");
+        }
+
+      } finally {
+        setReportsLoaded(true);
       }
-
-    } finally {
-      setReportsLoaded(true);
     }
-  }
 
-  loadReports();
-}, []);
+    loadReports();
+  }, []);
 
   useEffect(() => {
     async function saveReportsToDatabase() {
       if (!reportsLoaded) return;
-  
+
       try {
         // Save reports to IndexedDB
         for (const report of reports) {
           await saveReportToDB(report);
         }
-  
+
         // Back up reports to Local Storage
         localStorage.setItem(
           "outdoorReports",
           JSON.stringify(reports)
         );
-  
+
       } catch (error) {
         console.error("Failed to save reports:", error);
-        setMessage("Could not save reports locally.");
+        console.error("Error name:", error?.name);
+        console.error("Error message:", error?.message);
+        setMessage(`Save failed: ${error?.name || "Unknown"} - ${error?.message || String(error)}`);
       }
     }
-  
+
     saveReportsToDatabase();
   }, [reports, reportsLoaded]);
 
@@ -208,11 +209,16 @@ useEffect(() => {
 
     window.addEventListener("online", handleOnline);
 
+    // Check for pending operations when the app starts
+    if (navigator.onLine) {
+      console.log("App started online. Checking pending synchronisation...");
+      syncPendingOperations();
+    }
+
     return () => {
       window.removeEventListener("online", handleOnline);
     };
   }, []);
-
 
   const filteredReports = useMemo(() => {
     return reports
@@ -220,10 +226,10 @@ useEffect(() => {
         const matchesSearch = `${report.title} ${report.category} ${report.description}`
           .toLowerCase()
           .includes(search.toLowerCase());
-  
+
         const matchesStatus =
           statusFilter === "All" || report.status === statusFilter;
-  
+
         return matchesSearch && matchesStatus;
       })
       .sort(
@@ -250,47 +256,47 @@ useEffect(() => {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
   }
-  
-function getLocation() {
-  if (!navigator.geolocation) {
-    showMessage("Geolocation is not supported by this browser.");
-    return;
-  }
 
-  showMessage("Getting your location...");
-
-  navigator.geolocation.getCurrentPosition(
-    (position) => {
-      const { latitude, longitude } = position.coords;
-      const accuracy = position.coords.accuracy;
-      console.log("GPS accuracy:", accuracy);
-
-      setForm((current) => ({
-        ...current,
-        location: `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
-        accuracy: Math.round(accuracy)
-      }));
-
-      showMessage("Location added successfully.");
-    },
-    (error) => {
-      if (error.code === error.PERMISSION_DENIED) {
-        showMessage("Location permission was denied.");
-      } else if (error.code === error.POSITION_UNAVAILABLE) {
-        showMessage("Location information is unavailable.");
-      } else if (error.code === error.TIMEOUT) {
-        showMessage("Location request timed out. Please try again.");
-      } else {
-        showMessage("Could not get your location.");
-      }
-    },
-    {
-      enableHighAccuracy: true,
-      timeout: 15000,
-      maximumAge: 0
+  function getLocation() {
+    if (!navigator.geolocation) {
+      showMessage("Geolocation is not supported by this browser.");
+      return;
     }
-  );
-}
+
+    showMessage("Getting your location...");
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        const accuracy = position.coords.accuracy;
+        console.log("GPS accuracy:", accuracy);
+
+        setForm((current) => ({
+          ...current,
+          location: `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
+          accuracy: Math.round(accuracy)
+        }));
+
+        showMessage("Location added successfully.");
+      },
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) {
+          showMessage("Location permission was denied.");
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          showMessage("Location information is unavailable.");
+        } else if (error.code === error.TIMEOUT) {
+          showMessage("Location request timed out. Please try again.");
+        } else {
+          showMessage("Could not get your location.");
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0
+      }
+    );
+  }
 
   function addPhoto(event) {
     const file = event.target.files?.[0];
@@ -310,8 +316,23 @@ function getLocation() {
 
   async function startCamera() {
     try {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        showMessage("Camera access is not supported by this browser.");
+      console.log("Camera diagnostic:", {
+        secureContext: window.isSecureContext,
+        mediaDevices: navigator.mediaDevices,
+        getUserMedia: navigator.mediaDevices?.getUserMedia,
+        standalone: window.matchMedia("(display-mode: standalone)").matches,
+        origin: window.location.origin
+      });
+
+      if (!navigator.mediaDevices) {
+        showMessage(
+          `Camera unavailable. Secure: ${window.isSecureContext}, Legacy API: ${typeof navigator.getUserMedia}, WebKit API: ${typeof navigator.webkitGetUserMedia}`
+        );
+        return;
+      }
+
+      if (!navigator.mediaDevices.getUserMedia) {
+        showMessage("getUserMedia is unavailable.");
         return;
       }
 
@@ -322,8 +343,10 @@ function getLocation() {
 
       cameraStreamRef.current = stream;
       setCameraOpen(true);
+
     } catch (error) {
-      showMessage("Camera access failed. Please check browser permissions.");
+      console.error("Camera error:", error);
+      showMessage(`Camera failed: ${error.name} - ${error.message}`);
     }
   }
 
@@ -367,89 +390,240 @@ function getLocation() {
     showMessage("Photo captured successfully.");
   }
 
-  
-async function syncPendingOperations() {
-  try {
-    const pendingOperations = await getPendingSync();
+  async function syncPendingOperations() {
+    try {
+      const pendingOperations = await getPendingSync();
 
-    for (const operation of pendingOperations) {
-      try {
-        if (operation.type === "create") {
-          await createReport(operation.report);
+      for (const operation of pendingOperations) {
+        try {
+          if (operation.type === "create") {
+            await createReport(operation.report);
 
-        } else if (operation.type === "update") {
-          await updateReport(
-            operation.report.id,
-            operation.report
-          );
+          } else if (operation.type === "update") {
+            await updateReport(
+              operation.report.id,
+              operation.report
+            );
 
-        } else if (operation.type === "delete") {
-          await removeReport(operation.reportId);
+          } else if (operation.type === "delete") {
+            await removeReport(operation.reportId);
+          }
+
+          await removePendingSync(operation.id);
+
+        } catch (error) {
+          console.error("Sync operation failed:", error);
+          showMessage("Some reports could not be synchronised.");
+          return;
         }
-
-        await removePendingSync(operation.id);
-
-      } catch (error) {
-        console.error("Sync operation failed:", error);
-        showMessage("Some reports could not be synchronised.");
-        return;
       }
+
+      const serverReports = await fetchReports();
+
+      setReports(serverReports);
+
+      showMessage("Reports synchronised successfully.");
+
+    } catch (error) {
+      console.error("Could not synchronise reports:", error);
+      showMessage("Could not synchronise reports.");
+    }
+  }
+
+  async function saveReport(event) {
+    event.preventDefault();
+
+    if (!form.title.trim() || !form.description.trim()) {
+      showMessage("Please add a title and description.");
+      return;
     }
 
-    const serverReports = await fetchReports();
+    try {
+      if (editingId !== null) {
+        // Prepare the updated report
+        const existingReport = reports.find(
+          (report) => report.id === editingId
+        );
 
-    setReports(serverReports);
+        const updatedReport = {
+          ...existingReport,
+          ...form,
+          id: editingId
+        };
 
-    showMessage("Reports synchronised successfully.");
+        // Save locally first
+        await saveReportToDB(updatedReport);
 
-  } catch (error) {
-    console.error("Could not synchronise reports:", error);
-    showMessage("Could not synchronise reports.");
+        try {
+          // Try to update the server
+          const serverReport = await updateReport(
+            editingId,
+            updatedReport
+          );
+
+          setReports((current) =>
+            current.map((report) =>
+              report.id === editingId ? serverReport : report
+            )
+          );
+
+          showMessage("Report updated and synchronised.");
+
+        } catch (error) {
+          // Keep the update for later synchronisation
+          await addPendingSync({
+            type: "update",
+            report: updatedReport
+          });
+
+          setReports((current) =>
+            current.map((report) =>
+              report.id === editingId ? updatedReport : report
+            )
+          );
+
+          showMessage("Report saved offline. It will sync later.");
+        }
+
+      } else {
+        // Create a new report with a local ID
+        const newReport = {
+          ...form,
+          id: Date.now(),
+          status: "Open",
+          createdAt: new Date().toISOString()
+        };
+
+        // Save locally first
+        await saveReportToDB(newReport);
+
+        try {
+          // Try to create the report on the server
+          const savedReport = await createReport(newReport);
+
+          setReports((current) => [savedReport, ...current]);
+
+          showMessage("Report submitted.");
+
+        } catch (error) {
+          // Add the report to the offline sync queue
+          await addPendingSync({
+            type: "create",
+            report: newReport
+          });
+
+          setReports((current) => [newReport, ...current]);
+
+          showMessage("Report saved offline. It will sync later.");
+        }
+      }
+
+    } catch (error) {
+      console.error("Failed to save report:", error);
+      showMessage("Could not save report locally.");
+      return;
+    }
+
+    stopCamera();
+    setForm(emptyForm);
+    setEditingId(null);
+    setActivePage("reports");
   }
-}
-  
 
-async function saveReport(event) {
-  event.preventDefault();
+  async function deleteReport(id) {
+    if (!window.confirm("Delete this report?")) return;
 
-  if (!form.title.trim() || !form.description.trim()) {
-    showMessage("Please add a title and description.");
-    return;
-  }
+    try {
+      // Delete the report from local IndexedDB first
+      await deleteReportFromDB(id);
 
-  try {
-    if (editingId !== null) {
-      // Prepare the updated report
-      const existingReport = reports.find(
-        (report) => report.id === editingId
+      // Update React state
+      const updatedReports = reports.filter(
+        (report) => report.id !== id
       );
 
-      const updatedReport = {
-        ...existingReport,
-        ...form,
-        id: editingId
-      };
+      setReports(updatedReports);
 
-      // Save locally first
+      // Update Local Storage
+      localStorage.setItem(
+        "outdoorReports",
+        JSON.stringify(updatedReports)
+      );
+
+      try {
+        // Try to delete the report from the server
+        await removeReport(id);
+
+        showMessage("Report deleted.");
+
+      } catch (error) {
+        // Save the delete operation for later synchronisation
+        await addPendingSync({
+          type: "delete",
+          reportId: id
+        });
+
+        showMessage("Deletion saved offline. It will sync later.");
+      }
+
+    } catch (error) {
+      console.error("Failed to delete report:", error);
+      showMessage("Could not delete report locally.");
+    }
+  }
+
+  function editReport(report) {
+    stopCamera();
+
+    setForm({
+      title: report.title || "",
+      category: report.category || categories[0],
+      description: report.description || "",
+      location: report.location || "",
+      accuracy: report.accuracy ?? null,
+      photo: report.photo || ""
+    });
+
+    setEditingId(report.id);
+    setActivePage("form");
+  }
+
+  async function changeStatus(id, status) {
+    const existingReport = reports.find(
+      (report) => report.id === id
+    );
+
+    if (!existingReport) {
+      showMessage("Report not found.");
+      return;
+    }
+
+    const updatedReport = {
+      ...existingReport,
+      status
+    };
+
+    try {
+      // Save the updated report locally first
       await saveReportToDB(updatedReport);
 
       try {
         // Try to update the server
         const serverReport = await updateReport(
-          editingId,
+          id,
           updatedReport
         );
 
         setReports((current) =>
           current.map((report) =>
-            report.id === editingId ? serverReport : report
+            report.id === id ? serverReport : report
           )
         );
 
-        showMessage("Report updated and synchronised.");
+        showMessage("Report status updated and synchronised.");
 
       } catch (error) {
-        // Keep the update for later synchronisation
+        // Save the update for later synchronisation
         await addPendingSync({
           type: "update",
           report: updatedReport
@@ -457,108 +631,17 @@ async function saveReport(event) {
 
         setReports((current) =>
           current.map((report) =>
-            report.id === editingId ? updatedReport : report
+            report.id === id ? updatedReport : report
           )
         );
 
-        showMessage("Report saved offline. It will sync later.");
+        showMessage("Status saved offline. It will sync later.");
       }
-
-    } else {
-      // Create a new report with a local ID
-      const newReport = {
-        ...form,
-        id: Date.now(),
-        status: "Open",
-        createdAt: new Date().toISOString()
-      };
-
-      // Save locally first
-      await saveReportToDB(newReport);
-
-      try {
-        // Try to create the report on the server
-        const savedReport = await createReport(newReport);
-
-        setReports((current) => [savedReport, ...current]);
-
-        showMessage("Report submitted.");
-
-      } catch (error) {
-        // Add the report to the offline sync queue
-        await addPendingSync({
-          type: "create",
-          report: newReport
-        });
-
-        setReports((current) => [newReport, ...current]);
-
-        showMessage("Report saved offline. It will sync later.");
-      }
-    }
-
-  } catch (error) {
-    console.error("Failed to save report:", error);
-    showMessage("Could not save report locally.");
-    return;
-  }
-
-  stopCamera();
-  setForm(emptyForm);
-  setEditingId(null);
-  setActivePage("reports");
-}
-  
-
-async function deleteReport(id) {
-  if (!window.confirm("Delete this report?")) return;
-
-  try {
-    // Delete the report from local IndexedDB first
-    await deleteReportFromDB(id);
-
-    // Update React state
-    const updatedReports = reports.filter(
-      (report) => report.id !== id
-    );
-
-    setReports(updatedReports);
-
-    // Update Local Storage
-    localStorage.setItem(
-      "outdoorReports",
-      JSON.stringify(updatedReports)
-    );
-
-    try {
-      // Try to delete the report from the server
-      await removeReport(id);
-
-      showMessage("Report deleted.");
 
     } catch (error) {
-      // Save the delete operation for later synchronisation
-      await addPendingSync({
-        type: "delete",
-        reportId: id
-      });
-
-      showMessage("Deletion saved offline. It will sync later.");
+      console.error("Failed to update report status:", error);
+      showMessage("Could not save report status.");
     }
-
-  } catch (error) {
-    console.error("Failed to delete report:", error);
-    showMessage("Could not delete report locally.");
-  }
-}
-
-
-  function changeStatus(id, status) {
-    setReports((current) =>
-      current.map((report) =>
-        report.id === id ? { ...report, status } : report
-      )
-    );
   }
 
   function cancelForm() {
@@ -766,7 +849,9 @@ async function deleteReport(id) {
                             {report.location || "Location not added"}
                           </span>
                           <span>
-                            {new Date(report.createdAt).toLocaleDateString()}
+                            {report.createdAt
+                              ? new Date(report.createdAt).toLocaleString()
+                              : "Date unavailable"}
                           </span>
                         </div>
                       </div>
