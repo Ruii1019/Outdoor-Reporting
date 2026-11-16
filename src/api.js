@@ -1,4 +1,4 @@
-const API_URL = "http://localhost:5001/api/reports";
+const API_URL = "https://outdoor-reporting.onrender.com/api/reports";
 
 // Get all reports from the server
 export async function fetchReports() {
