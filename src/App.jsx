@@ -11,7 +11,7 @@ import {
   ClipboardList,
   Clock3,
   AlertCircle,
-  Leaf
+  NotebookPen
 } from "lucide-react";
 import "./App.css";
 import {
@@ -663,7 +663,7 @@ function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
-            <Leaf size={21} />
+            <NotebookPen size={21} />
           </div>
           <div>
             <strong>FieldNote</strong>
@@ -746,7 +746,7 @@ function App() {
                 </p>
               </div>
               <div className="welcome-icon">
-                <Leaf size={58} strokeWidth={1.2} />
+                <NotebookPen size={58} strokeWidth={1.2} />
               </div>
             </section>
 
@@ -827,7 +827,7 @@ function App() {
                           <img src={report.photo} alt="" />
                         ) : (
                           <div className="image-placeholder">
-                            <Leaf size={25} />
+                            <NotebookPen size={25} />
                           </div>
                         )}
                       </div>
