@@ -1,59 +1,49 @@
-const API_URL = "https://outdoor-reporting.onrender.com/api/reports";
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.DEV
+    ? "http://localhost:5001"
+    : "https://outdoor-reporting.onrender.com")
+).replace(/\/$/, "");
 
-// Get all reports from the server
-export async function fetchReports() {
-  const response = await fetch(API_URL);
+const API_URL = `${API_BASE_URL}/api/reports`;
+
+async function request(url, options) {
+  const response = await fetch(url, options);
 
   if (!response.ok) {
-    throw new Error("Failed to fetch reports");
+    const detail = await response.text().catch(() => "");
+    throw new Error(
+      `API request failed (${response.status})${detail ? `: ${detail}` : ""}`
+    );
   }
 
   return response.json();
+}
+
+// Get all reports from the server
+export function fetchReports() {
+  return request(API_URL);
 }
 
 // Create a new report
-export async function createReport(report) {
-  const response = await fetch(API_URL, {
+export function createReport(report) {
+  return request(API_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(report)
   });
-
-  if (!response.ok) {
-    throw new Error("Failed to create report");
-  }
-
-  return response.json();
 }
 
 // Update an existing report
-export async function updateReport(id, report) {
-  const response = await fetch(`${API_URL}/${id}`, {
+export function updateReport(id, report) {
+  return request(`${API_URL}/${id}`, {
     method: "PUT",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(report)
   });
-
-  if (!response.ok) {
-    throw new Error("Failed to update report");
-  }
-
-  return response.json();
 }
 
 // Delete a report
-export async function removeReport(id) {
-  const response = await fetch(`${API_URL}/${id}`, {
-    method: "DELETE"
-  });
-
-  if (!response.ok) {
-    throw new Error("Failed to delete report");
-  }
-
-  return response.json();
+export function removeReport(id) {
+  return request(`${API_URL}/${id}`, { method: "DELETE" });
 }

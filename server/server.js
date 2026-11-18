@@ -3,7 +3,7 @@ import cors from "cors";
 import db from "./database.js";
 
 const app = express();
-const PORT = 5001;
+const PORT = Number(process.env.PORT) || 5001;
 // Insert starter reports if the database is empty
 const reportCount = db
   .prepare("SELECT COUNT(*) AS count FROM reports")
@@ -150,6 +150,6 @@ app.delete("/api/reports/:id", (req, res) => {
   });
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`FieldNote server is running on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`FieldNote API server is listening on port ${PORT}`);
 });
